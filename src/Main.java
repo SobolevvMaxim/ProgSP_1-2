@@ -3,55 +3,65 @@ import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BinaryOperator;
+import java.util.function.ToLongFunction;
 
 public class Main {
-//    12. На склад с некоторой фирмы подъезжают грузовики для погрузки груза. Всего надо вывести 145 т. груза.
-//    У склада только одни ворота. Всего у фирмы 3 грузовика. У каждого грузовика своя
-//    грузовместимость (1,5 т., 3,4 т. и 5.1 т., соответственно), также каждый грузовик характеризуется своим временем,
-//    затрачиваемым на доставку груза со склада (30 мин., 45 мин., 40 мин.). Отгрузка из ворот склада осуществляется так,
-//    что пока один грузовик не загружен полностью, не переходят к погрузке следующего грузовика.
-//    Время погрузки одной тонны груза составляет 3 мин. Приложение должно выводить общее время, за которое весь груз
-//    будет вывезен со склада и количество рейсов, которое сделает каждый грузовик.
-
-    private final static int FINAL_MASS = 145;  // tons
+    private final static int FINAL_MASS = 145000;  // kg
     private final static int TON_DELAY = 180;   // seconds
+
+    private static final AtomicInteger currentMass = new AtomicInteger(0);   // kg
+
+    private static final ExecutorService pool = Executors.newFixedThreadPool(3);
+    private static List<Future<Double>> futures;
 
     private static final ArrayList<TruckCallable> tasks = new ArrayList<>(3);
 
-    private static final AtomicReference<Float> currentMass = new AtomicReference<>(0.0f); // tons
-    private static final AtomicLong time = new AtomicLong(0);
-
-    private static final ExecutorService pool = Executors.newFixedThreadPool(3);
-
-
     public static void main(String[] args) throws InterruptedException {
-        tasks.add(new TruckCallable(new Truck(1.5, 1800)));
-        tasks.add(new TruckCallable(new Truck(3.4, 2700)));
-        tasks.add(new TruckCallable(new Truck(5.1, 2400)));
+        tasks.add(new TruckCallable(new Truck(0, 1500, 1800)));
+        tasks.add(new TruckCallable(new Truck(1, 3400, 2700)));
+        tasks.add(new TruckCallable(new Truck(2, 5100, 2400)));
 
-        pool.invokeAll(tasks);
+        futures = pool.invokeAll(tasks);
 
         System.out.println("Work done!");
-        System.out.println(currentMass.get());
-        System.out.println(time.get());
+        System.out.println("Total time: " + tasks.stream()
+                .mapToLong(value -> value.totalTimeSpend.get())
+                .reduce(Long::sum)
+                .orElse(0) / 60
+        );
+        System.out.println("Total tons: " + currentMass.get() / 1000);
+        System.out.println(tasks);
     }
 
     static class Truck {
-        public final double loadCapacity;   // tons
+        public final long id;
+        public final int loadCapacity;   // kg
         public final int deliveryTime;  // seconds
 
-        public Truck(double loadCapacity, int deliveryTime) {
+        public Truck(long id, int loadCapacity, int deliveryTime) {
+            this.id = id;
             this.loadCapacity = loadCapacity;
             this.deliveryTime = deliveryTime;
+        }
+
+        @Override
+        public String toString() {
+            return "Truck{" +
+                    "id=" + id +
+                    '}';
         }
     }
 
     static class TruckCallable implements Callable<Double> {
 
         private final Truck truck;
+
+        public final AtomicLong totalTimeSpend = new AtomicLong(0);  // min
+        public final AtomicInteger totalRides = new AtomicInteger(0);
 
         public TruckCallable(Truck truck) {
             this.truck = truck;
@@ -60,31 +70,41 @@ public class Main {
         @Override
         public Double call() throws Exception {
             while (true) {
-                float massToSet = currentMass.get() + (float) truck.loadCapacity;
+                int massToSet = currentMass.get() + truck.loadCapacity;
 
                 if (massToSet > FINAL_MASS) massToSet = FINAL_MASS;
 
-                float massToAdd = massToSet - currentMass.get();
-//                System.out.println(massToAdd + "   " + currentMass.get());
-                long timeToUnload = (long) (TON_DELAY * massToAdd);
+                int massToAdd = massToSet - currentMass.get();
+                long timeToUnload = TON_DELAY * massToAdd / 1000;
 
-                Thread.sleep(timeToUnload / 10);
+                Thread.sleep(timeToUnload / 100);
 
                 currentMass.set(massToSet);
-                time.addAndGet(timeToUnload);
+                totalTimeSpend.addAndGet(timeToUnload + truck.deliveryTime);
 
-                System.out.println(Thread.currentThread().getId() + " thread: "
-                        + time.get() + " sec. " + "mass = " + currentMass.get());
+                System.out.println(Thread.currentThread().getId() + " Thread " + truck.id + " truck worked: "
+                        + totalTimeSpend.get() + " total sec. " + "total mass = " + currentMass);
 
                 if (massToSet >= FINAL_MASS) {
                     pool.shutdownNow();
+                    futures.forEach((it) -> it.cancel(true));
                     break;
                 }
 
-                Thread.sleep(truck.deliveryTime / 10);
+                Thread.sleep(truck.deliveryTime / 100);
+                totalRides.incrementAndGet();
             }
 
             return null;
+        }
+
+        @Override
+        public String toString() {
+            return "TruckCallable{" +
+                    "truck=" + truck +
+                    ", totalTimeSpend=" + totalTimeSpend +
+                    ", totalRides=" + totalRides +
+                    '}';
         }
     }
 }
